@@ -21,10 +21,13 @@ COPY --from=source /upstream/transports /src/transports
 COPY --from=ui /ui/out /src/transports/bifrost-http/ui
 COPY . /src/web-providers
 ENV CGO_ENABLED=1 GOOS=linux
-RUN go work init ./transports ./web-providers && go work sync
-RUN cd /src/transports && go build -trimpath -tags sqlite_static \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go work init ./transports ./web-providers && go work sync
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    cd /src/transports && go build -trimpath -tags sqlite_static \
     -ldflags='-w -s -X main.Version=v2.2.6-web-providers' -o /out/bifrost ./bifrost-http
-RUN cd /src/web-providers && go build -trimpath -tags sqlite_static \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    cd /src/web-providers && go build -trimpath -tags sqlite_static \
     -buildmode=plugin -o /out/web-providers.so ./plugin
 
 FROM alpine:3.24

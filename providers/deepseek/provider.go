@@ -7,10 +7,11 @@ package deepseek
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/WebLLmTech/bifrost-web-providers/core"
 )
@@ -42,12 +43,12 @@ type Options struct {
 }
 
 const (
-	defaultUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-	defaultAppVersion  = "20241129.1"
-	defaultClientVer   = "2.5.0"
-	defaultSecChUa     = `"Chromium";v="133", "Google Chrome";v="133", "Not?A_Brand";v="99"`
-	defaultPowMaxIter  = 2_000_000
-	defaultModelOwner  = "deepseek-free-api"
+	defaultUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+	defaultAppVersion = "20241129.1"
+	defaultClientVer  = "2.5.0"
+	defaultSecChUa    = `"Chromium";v="133", "Google Chrome";v="133", "Not?A_Brand";v="99"`
+	defaultPowMaxIter = 2_000_000
+	defaultModelOwner = "deepseek-free-api"
 )
 
 // staticModels mirrors the old utils.ts model list. Descriptions were dropped:
@@ -68,10 +69,10 @@ func applyDefaults(o *Options) error {
 		o.BaseURL = defaultBaseURL
 	}
 	u, err := url.Parse(o.BaseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return core.Invalid("base_url must be an absolute http(s) URL")
 	}
-	o.BaseURL = strings.TrimSuffix(u.Scheme + "://" + u.Host + u.Path, "/")
+	o.BaseURL = strings.TrimSuffix(u.Scheme+"://"+u.Host+u.Path, "/")
 	if o.UserAgent == "" {
 		o.UserAgent = defaultUserAgent
 	}
@@ -85,9 +86,9 @@ func applyDefaults(o *Options) error {
 		o.SecChUa = defaultSecChUa
 	}
 	defaults := []struct {
-		name string
+		name  string
 		value *int
-		def  int
+		def   int
 	}{
 		{"token_ttl_seconds", &o.TokenTTLSeconds, 3600},
 		{"pow_max_iterations", &o.PowMaxIterations, defaultPowMaxIter},
@@ -131,7 +132,7 @@ func New(ctx context.Context, raw json.RawMessage, services *core.Services) (cor
 		if err := dec.Decode(&opts); err != nil {
 			return nil, core.Invalid("deepseek options: " + err.Error())
 		}
-		if dec.More() {
+		if dec.Decode(new(any)) != io.EOF {
 			return nil, core.Invalid("deepseek options: unexpected trailing data")
 		}
 	}
@@ -198,6 +199,15 @@ func (p *Provider) Configure(r core.ChatRequest) (core.ChatConfig, error) {
 }
 
 func (p *Provider) Open(ctx context.Context, in core.RunInput) (core.EventStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(p.api.baseCtx, cancel)
+	success := false
+	defer func() {
+		if !success {
+			stop()
+			cancel()
+		}
+	}()
 	token := in.Context.Credential.Value
 	if token == "" {
 		return nil, core.Unauthorized("need token")
@@ -217,6 +227,9 @@ func (p *Provider) Open(ctx context.Context, in core.RunInput) (core.EventStream
 	if err != nil {
 		return nil, err
 	}
+	if len(refs) > 32 {
+		return nil, core.Invalid("DeepSeek accepts at most 32 attachments per request")
+	}
 	attachments, err := p.uploadAll(ctx, token, refs, modelType, cfg.Features.Thinking)
 	if err != nil {
 		return nil, err
@@ -225,9 +238,16 @@ func (p *Provider) Open(ctx context.Context, in core.RunInput) (core.EventStream
 	for _, a := range attachments {
 		refIDs = append(refIDs, a.ID)
 	}
-	prompt := buildPrompt(cfg, in.Request.Messages)
+	prompt, err := core.PromptText(in.Request.Messages, cfg)
+	if err != nil {
+		return nil, err
+	}
 
-	return core.Conversation(ctx,
+	accessToken, err := p.api.acquireToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := core.Conversation(ctx,
 		func(ctx context.Context) (string, error) {
 			return p.api.createConversation(ctx, token)
 		},
@@ -248,9 +268,14 @@ func (p *Provider) Open(ctx context.Context, in core.RunInput) (core.EventStream
 			}, powResponse)
 		},
 		func(ctx context.Context, sessionID string) error {
-			return p.api.deleteConversation(ctx, sessionID, token)
+			return p.api.deleteConversation(ctx, sessionID, accessToken)
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	success = true
+	return core.ManagedStream(ctx, stream, func(context.Context) error { stop(); cancel(); return nil }, time.Second), nil
 }
 
 // uploadAll mirrors Promise.all over uploadFile: concurrent uploads, first
@@ -265,9 +290,9 @@ func (p *Provider) uploadAll(ctx context.Context, token string, refs []core.File
 
 	results := make([]attachment, len(refs))
 	var (
-		mu      sync.Mutex
-		first   error
-		wg      sync.WaitGroup
+		mu    sync.Mutex
+		first error
+		wg    sync.WaitGroup
 	)
 	for i, ref := range refs {
 		wg.Add(1)
@@ -288,40 +313,6 @@ func (p *Provider) uploadAll(ctx context.Context, token string, refs []core.File
 		return nil, first
 	}
 	return results, nil
-}
-
-// buildPrompt reproduces utils.ts mergeMessages: assistant tool calls are
-// pre-serialized with the delimited markers (ToolCalls stay on the message so
-// core.MergeMessages can resolve tool-result names), then merged messages are
-// concatenated with system envelopes and the raw user envelope.
-func buildPrompt(cfg core.ChatConfig, messages []core.Message) string {
-	prepared := make([]core.Message, len(messages))
-	copy(prepared, messages)
-	if cfg.ToolProtocol != nil {
-		m := cfg.ToolProtocol.Markers
-		for i, msg := range prepared {
-			if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
-				continue
-			}
-			blocks := make([]string, 0, len(msg.ToolCalls))
-			for _, call := range msg.ToolCalls {
-				blocks = append(blocks, m.Start+"\n"+
-					m.NameStart+call.Function.Name+m.NameEnd+"\n"+
-					m.ArgsStart+call.Function.Arguments+m.ArgsEnd+"\n"+m.End)
-			}
-			prepared[i].Content = core.TextContent(msg.Content.Text() + "\n" + strings.Join(blocks, "\n"))
-		}
-	}
-	merged := core.MergeMessages(prepared, cfg)
-	var b strings.Builder
-	for _, msg := range merged {
-		if msg.Role == "system" {
-			fmt.Fprintf(&b, "<message>system\n%s</message>\n", msg.Content.Text())
-			continue
-		}
-		b.WriteString(msg.Content.Text())
-	}
-	return b.String()
 }
 
 func (p *Provider) Close(context.Context) error {

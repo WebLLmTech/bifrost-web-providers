@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"sort"
 	"strings"
 )
 
@@ -99,4 +100,53 @@ func NormalizeJSON(text string, format ResponseFormat) (string, error) {
 	}
 	b, _ := json.Marshal(obj)
 	return string(b), nil
+}
+
+// PromptText renders the shared history envelope, including assistant function
+// calls. Both web providers use the same format; only the tool protocol differs.
+func PromptText(messages []Message, cfg ChatConfig) (string, error) {
+	prepared := append([]Message(nil), messages...)
+	if cfg.ToolProtocol != nil {
+		p := cfg.ToolProtocol
+		m := p.Markers
+		for i, msg := range prepared {
+			if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+				continue
+			}
+			var b strings.Builder
+			b.WriteString(msg.Content.Text())
+			for _, call := range msg.ToolCalls {
+				var args map[string]json.RawMessage
+				if call.Function.Name == "" || json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
+					return "", Invalid("assistant tool arguments must be a JSON object")
+				}
+				b.WriteString("\n" + m.Start + "\n")
+				if p.Mode == "delimited" {
+					b.WriteString(m.NameStart + call.Function.Name + m.NameEnd + "\n" + m.ArgsStart + call.Function.Arguments + m.ArgsEnd + "\n")
+				} else {
+					b.WriteString("[Call:" + call.Function.Name + "]\n")
+					keys := make([]string, 0, len(args))
+					for key := range args {
+						keys = append(keys, key)
+					}
+					sort.Strings(keys)
+					for _, key := range keys {
+						b.WriteString("[CallParameter:" + key + "]\n" + string(args[key]) + "\n[/CallParameter]\n")
+					}
+					b.WriteString("[/Call]\n")
+				}
+				b.WriteString(m.End + "\n")
+			}
+			prepared[i].Content = TextContent(b.String())
+		}
+	}
+	var b strings.Builder
+	for _, msg := range MergeMessages(prepared, cfg) {
+		if msg.Role == "system" {
+			fmt.Fprintf(&b, "<message>system\n%s</message>\n", msg.Content.Text())
+		} else {
+			b.WriteString(msg.Content.Text())
+		}
+	}
+	return b.String(), nil
 }

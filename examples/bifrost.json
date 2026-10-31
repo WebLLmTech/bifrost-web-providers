@@ -1,0 +1,134 @@
+{
+  "client": {
+    "enable_logging": true,
+    "enforce_auth_on_inference": true
+  },
+  "providers": {
+    "deepseek-web": {
+      "keys": [
+        {
+          "id": "deepseek-web-key",
+          "name": "deepseek-web",
+          "value": "env.DEEPSEEK_REFRESH_TOKEN",
+          "models": [
+            "*"
+          ],
+          "weight": 1,
+          "is_active": true
+        }
+      ],
+      "network_config": {
+        "base_url": "http://127.0.0.1:8792/providers/deepseek-web",
+        "allow_private_network": true,
+        "max_retries": 0
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "list_models": true,
+          "chat_completion": true,
+          "chat_completion_stream": true,
+          "responses": true,
+          "responses_stream": true,
+          "text_completion": false,
+          "text_completion_stream": false,
+          "embedding": false,
+          "speech": false,
+          "speech_stream": false,
+          "transcription": false,
+          "transcription_stream": false
+        }
+      }
+    },
+    "yuanbao-web": {
+      "keys": [
+        {
+          "id": "yuanbao-web-key",
+          "name": "yuanbao-web",
+          "value": "env.YUANBAO_COOKIE_FIELDS",
+          "models": [
+            "*"
+          ],
+          "weight": 1,
+          "is_active": true
+        }
+      ],
+      "network_config": {
+        "base_url": "http://127.0.0.1:8792/providers/yuanbao-web",
+        "allow_private_network": true,
+        "max_retries": 0
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "list_models": true,
+          "chat_completion": true,
+          "chat_completion_stream": true,
+          "responses": true,
+          "responses_stream": true,
+          "text_completion": false,
+          "text_completion_stream": false,
+          "embedding": false,
+          "speech": false,
+          "speech_stream": false,
+          "transcription": false,
+          "transcription_stream": false
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "web-providers",
+      "enabled": true,
+      "path": "/plugins/web-providers.so",
+      "config": {
+        "listen_addr": "127.0.0.1:8792",
+        "providers": {
+          "deepseek-web": {
+            "type": "deepseek",
+            "options": {}
+          },
+          "yuanbao-web": {
+            "type": "yuanbao",
+            "options": {
+              "browserless_ws": "ws://browserless-chromium:3000"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "web-providers-client",
+        "name": "web-providers-client",
+        "value": "env.BIFROST_VIRTUAL_KEY",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "deepseek-web",
+            "allowed_models": [
+              "*"
+            ],
+            "key_ids": [
+              "deepseek-web-key"
+            ],
+            "weight": 1
+          },
+          {
+            "provider": "yuanbao-web",
+            "allowed_models": [
+              "*"
+            ],
+            "key_ids": [
+              "yuanbao-web-key"
+            ],
+            "weight": 1
+          }
+        ]
+      }
+    ]
+  }
+}

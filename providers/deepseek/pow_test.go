@@ -109,7 +109,7 @@ func TestAnswerChallengeEncodesExactKeyOrder(t *testing.T) {
 
 func TestAnswerChallengeRejectsUnknownAlgorithm(t *testing.T) {
 	_, err := answerChallenge(powChallenge{Algorithm: "Sha256"}, "/api/v0/chat/completion", 0)
-	if err == nil || !strings.Contains(err.Error(), "Unsupported algorithm: Sha256") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported DeepSeek PoW algorithm") {
 		t.Fatalf("expected unsupported algorithm error, got %v", err)
 	}
 }

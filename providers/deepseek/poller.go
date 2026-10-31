@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/WebLLmTech/bifrost-web-providers/core"
 	"sync"
 	"time"
 )
@@ -35,7 +36,10 @@ type FileRateLimitError struct {
 	RetryAfter time.Duration
 }
 
-func (e *FileRateLimitError) Error() string { return "fetch uploaded files rate limited" }
+func (e *FileRateLimitError) Error() string { return "DeepSeek rate limited the request" }
+func (e *FileRateLimitError) Unwrap() error {
+	return core.Upstream(429, "rate_limit_exceeded", e.Error())
+}
 
 func fileError(f attachment) error {
 	code := f.Status
@@ -68,10 +72,11 @@ type FileParsePoller struct {
 	maxBackoff time.Duration
 	onIdle     func()
 
-	mu      sync.Mutex
-	pending map[string][]*fileWaiter
-	running bool
-	wake    chan struct{}
+	mu          sync.Mutex
+	pending     map[string][]*fileWaiter
+	running     bool
+	wake        chan struct{}
+	fetchCancel context.CancelFunc
 }
 
 func NewFileParsePoller(
@@ -116,8 +121,18 @@ func (p *FileParsePoller) WaitFor(ctx context.Context, file attachment) (attachm
 		return attachment{}, fileError(file)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return attachment{}, err
+	}
+	if err := p.base.Err(); err != nil {
+		return attachment{}, err
+	}
 	waiter := &fileWaiter{deadline: time.Now().Add(p.timeout), result: make(chan fileResult, 1)}
 	p.mu.Lock()
+	if err := p.base.Err(); err != nil {
+		p.mu.Unlock()
+		return attachment{}, err
+	}
 	p.pending[file.ID] = append(p.pending[file.ID], waiter)
 	start := !p.running
 	p.running = true
@@ -155,6 +170,9 @@ func (p *FileParsePoller) removeWaiter(id string, waiter *fileWaiter) {
 		delete(p.pending, id)
 	} else {
 		p.pending[id] = list
+	}
+	if len(p.pending) == 0 && p.fetchCancel != nil {
+		p.fetchCancel()
 	}
 	p.mu.Unlock()
 	p.signal()
@@ -240,7 +258,34 @@ func (p *FileParsePoller) poll() {
 			return
 		}
 
-		files, err := p.fetchFiles(ctx, ids)
+		p.mu.Lock()
+		deadline := time.Now().Add(p.timeout)
+		for _, waiters := range p.pending {
+			for _, w := range waiters {
+				if w.deadline.Before(deadline) {
+					deadline = w.deadline
+				}
+			}
+		}
+		fetchCtx, cancel := context.WithDeadline(ctx, deadline)
+		p.fetchCancel = cancel
+		if len(p.pending) == 0 {
+			cancel()
+		}
+		p.mu.Unlock()
+		files, err := p.fetchFiles(fetchCtx, ids)
+		fetchExpired := fetchCtx.Err() != nil
+		cancel()
+		p.mu.Lock()
+		p.fetchCancel = nil
+		p.mu.Unlock()
+		p.expireWaiters()
+		if fetchExpired {
+			if ctx.Err() != nil {
+				p.settleAll(ctx.Err())
+			}
+			continue
+		}
 		if err != nil {
 			var rateLimit *FileRateLimitError
 			if errors.As(err, &rateLimit) {
@@ -278,7 +323,7 @@ func (p *FileParsePoller) expireWaiters() {
 				active = append(active, w)
 				continue
 			}
-			w.result <- fileResult{err: fmt.Errorf("uploaded file parsing timed out: %s", id)}
+			w.result <- fileResult{err: core.Upstream(504, "file_parse_timeout", "uploaded file parsing timed out")}
 		}
 		if len(active) == 0 {
 			delete(p.pending, id)

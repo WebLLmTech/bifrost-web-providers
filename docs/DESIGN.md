@@ -82,7 +82,8 @@ as a standalone process; production architecture is the in-process plugin.
 
 1. Implement core, race-tested deterministic fixtures and native plugin loading.
 2. Freeze the Provider contract and document migration tasks for QwenDev.
-3. QwenDev migrates both services and tests against synthetic upstream servers.
+3. QwenDev began the DeepSeek draft; Codex took over at the user’s request, reviewed it,
+   completed both providers and added synthetic upstream/CDP tests.
 4. Review implementations, build the dynamic Bifrost image, run full gateway
    integration, then separately plan production switching and rollback.
 

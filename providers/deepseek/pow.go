@@ -1,6 +1,7 @@
 package deepseek
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -120,12 +121,12 @@ func lePutUint64(b []byte, v uint64) {
 
 // powChallenge is the server-issued challenge from create_pow_challenge.
 type powChallenge struct {
-	Algorithm string `json:"algorithm"`
-	Challenge string `json:"challenge"`
-	Salt      string `json:"salt"`
-	Difficulty int   `json:"difficulty"`
-	ExpireAt  int64  `json:"expire_at"`
-	Signature string `json:"signature"`
+	Algorithm  string `json:"algorithm"`
+	Challenge  string `json:"challenge"`
+	Salt       string `json:"salt"`
+	Difficulty int    `json:"difficulty"`
+	ExpireAt   int64  `json:"expire_at"`
+	Signature  string `json:"signature"`
 }
 
 // powAnswer mirrors btoa(JSON.stringify({...})) from lib/challenge.ts,
@@ -142,6 +143,14 @@ type powAnswer struct {
 // solvePow scans nonce in [0, difficulty) like wasm_solve. maxIterations
 // bounds CPU use; production difficulty is 144000.
 func solvePow(challengeHex, salt string, expireAt int64, difficulty, maxIterations int) (int64, bool) {
+	nonce, ok, _ := solvePowContext(context.Background(), challengeHex, salt, expireAt, difficulty, maxIterations)
+	return nonce, ok
+}
+
+func solvePowContext(ctx context.Context, challengeHex, salt string, expireAt int64, difficulty, maxIterations int) (int64, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	if difficulty < 0 {
 		difficulty = 0
 	}
@@ -152,18 +161,23 @@ func solvePow(challengeHex, salt string, expireAt int64, difficulty, maxIteratio
 	prefix := salt + "_" + strconv.FormatInt(expireAt, 10) + "_"
 	target, err := hex.DecodeString(challengeHex)
 	if err != nil || len(target) != digestSize {
-		return 0, false
+		return 0, false, nil
 	}
 	buf := make([]byte, 0, len(prefix)+24)
 	for nonce := 0; nonce < limit; nonce++ {
+		if nonce%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, false, err
+			}
+		}
 		buf = append(buf[:0], prefix...)
 		buf = strconv.AppendInt(buf, int64(nonce), 10)
 		digest := deepseekHashV1(buf)
 		if equalBytes(digest[:], target) {
-			return int64(nonce), true
+			return int64(nonce), true, nil
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 func equalBytes(a, b []byte) bool {
@@ -181,10 +195,17 @@ func equalBytes(a, b []byte) bool {
 // answerChallenge solves the challenge and encodes the X-Ds-Pow-Response
 // payload exactly like answerChallenge() in lib/challenge.ts.
 func answerChallenge(ch powChallenge, targetPath string, maxIterations int) (string, error) {
+	return answerChallengeContext(context.Background(), ch, targetPath, maxIterations)
+}
+
+func answerChallengeContext(ctx context.Context, ch powChallenge, targetPath string, maxIterations int) (string, error) {
 	if ch.Algorithm != "DeepSeekHashV1" {
-		return "", fmt.Errorf("Unsupported algorithm: %s", ch.Algorithm)
+		return "", fmt.Errorf("unsupported DeepSeek PoW algorithm")
 	}
-	nonce, ok := solvePow(ch.Challenge, ch.Salt, ch.ExpireAt, ch.Difficulty, maxIterations)
+	nonce, ok, err := solvePowContext(ctx, ch.Challenge, ch.Salt, ch.ExpireAt, ch.Difficulty, maxIterations)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		return "", fmt.Errorf("get challenge failed")
 	}

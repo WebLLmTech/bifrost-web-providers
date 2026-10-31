@@ -434,3 +434,39 @@ func TestCollectReasoningUsageAndToolDeltas(t *testing.T) {
 		t.Fatal("stream not closed")
 	}
 }
+
+func TestPromptTextSerializesToolHistory(t *testing.T) {
+	for _, mode := range []string{"bracket", "delimited"} {
+		t.Run(mode, func(t *testing.T) {
+			protocol, err := NewToolProtocol(mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := ChatConfig{ToolProtocol: protocol}
+			messages := []Message{
+				{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Type: "function", Function: ToolFunction{Name: "lookup", Arguments: `{"name":"city","count":2}`}}}},
+				{Role: "tool", ToolCallID: "call-1", Content: TextContent("result")},
+				{Role: "user", Content: TextContent("continue")},
+			}
+			prompt, err := PromptText(messages, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block, _, ok := between(prompt, protocol.Markers.Start, protocol.Markers.End)
+			if !ok {
+				t.Fatal("missing assistant call")
+			}
+			calls, err := protocol.Parse(block)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(calls) != 1 || calls[0].Function.Name != "lookup" || !strings.Contains(calls[0].Function.Arguments, `"count":2`) || !strings.Contains(prompt, "[Result:lookup]") {
+				t.Fatalf("lost tool history: %s", prompt)
+			}
+			messages[0].ToolCalls[0].Function.Arguments = "invalid"
+			if _, err = PromptText(messages, cfg); err == nil {
+				t.Fatal("accepted invalid tool arguments")
+			}
+		})
+	}
+}

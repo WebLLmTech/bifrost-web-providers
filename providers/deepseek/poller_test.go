@@ -101,7 +101,7 @@ func TestPollerTimeout(t *testing.T) {
 		5*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond, nil)
 
 	_, err := poller.WaitFor(context.Background(), testAttachment("file-1", "PENDING"))
-	if err == nil || !strings.Contains(err.Error(), "uploaded file parsing timed out: file-1") {
+	if err == nil || !strings.Contains(err.Error(), "uploaded file parsing timed out") {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 }

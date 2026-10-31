@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"mime"
@@ -25,14 +25,14 @@ import (
 )
 
 const (
-	defaultBaseURL     = "https://chat.deepseek.com"
-	completionPath     = "/api/v0/chat/completion"
-	fileUploadPath     = "/api/v0/file/upload_file"
-	powChallengePath   = "/api/v0/chat/create_pow_challenge"
-	sessionCreatePath  = "/api/v0/chat_session/create"
-	sessionDeletePath  = "/api/v0/chat_session/delete"
-	usersCurrentPath   = "/api/v0/users/current"
-	fileFetchPath      = "/api/v0/file/fetch_files"
+	defaultBaseURL       = "https://chat.deepseek.com"
+	completionPath       = "/api/v0/chat/completion"
+	fileUploadPath       = "/api/v0/file/upload_file"
+	powChallengePath     = "/api/v0/chat/create_pow_challenge"
+	sessionCreatePath    = "/api/v0/chat_session/create"
+	sessionDeletePath    = "/api/v0/chat_session/delete"
+	usersCurrentPath     = "/api/v0/users/current"
+	fileFetchPath        = "/api/v0/file/fetch_files"
 	maxConcurrentUploads = 3
 )
 
@@ -42,9 +42,9 @@ var rateLimitTextRE = regexp.MustCompile(`(?i)TOO_MANY_REQUESTS|RATE_LIMIT|too m
 // challenge solving, chat session lifecycle, the patch-protocol completion
 // stream, multipart upload and batched file-parse polling.
 type apiClient struct {
-	http  *core.HTTPClient
-	files *core.FileResolver
-	opts  Options
+	http   *core.HTTPClient
+	files  *core.FileResolver
+	opts   Options
 	base   string
 	origin string
 
@@ -57,7 +57,7 @@ type apiClient struct {
 	intercomSession string
 
 	pollersMu sync.Mutex
-	pollers   map[string]*FileParsePoller
+	pollers   map[[32]byte]*pollerEntry
 }
 
 func newAPIClient(baseCtx context.Context, opts Options, httpClient *core.HTTPClient, files *core.FileResolver) *apiClient {
@@ -74,7 +74,7 @@ func newAPIClient(baseCtx context.Context, opts Options, httpClient *core.HTTPCl
 		deviceID:        firstNonEmpty(opts.DeviceID, uuidHex()),
 		intercomDevice:  firstNonEmpty(opts.IntercomDeviceID, uuidV4()),
 		intercomSession: firstNonEmpty(opts.IntercomSession, randomIntercomSession()),
-		pollers:         map[string]*FileParsePoller{},
+		pollers:         map[[32]byte]*pollerEntry{},
 	}
 	return c
 }
@@ -145,11 +145,12 @@ func applyHeaders(req *http.Request, h http.Header) {
 	}
 }
 
-func statusText(status int) string {
-	if text := http.StatusText(status); text != "" {
-		return text
+func (c *apiClient) invalidateOnAuth(refreshToken string, err error) error {
+	var apiErr *core.APIError
+	if errors.As(err, &apiErr) && (apiErr.Status == 401 || apiErr.Status == 403) {
+		c.tokens.Invalidate(refreshToken)
 	}
-	return strconv.Itoa(status)
+	return err
 }
 
 // acquireToken refreshes the access token via /users/current, cached per
@@ -166,6 +167,9 @@ func (c *apiClient) acquireToken(ctx context.Context, refreshToken string) (stri
 			return "", time.Time{}, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return "", time.Time{}, core.ErrorFromStatus("DeepSeek token refresh", resp.StatusCode)
+		}
 		ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		body, err := core.ReadBounded(resp.Body, c.http.MaxJSONBytes)
 		if err != nil {
@@ -173,10 +177,6 @@ func (c *apiClient) acquireToken(ctx context.Context, refreshToken string) (stri
 		}
 		if ct == "text/html" {
 			return "", time.Time{}, core.Upstream(502, "rejected", "rejected by server")
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", time.Time{}, core.Upstream(resp.StatusCode, "upstream_http_error",
-				fmt.Sprintf("token refresh failed: %d %s", resp.StatusCode, strings.TrimSpace(string(body))))
 		}
 		var env struct {
 			Code *int            `json:"code"`
@@ -187,11 +187,7 @@ func (c *apiClient) acquireToken(ctx context.Context, refreshToken string) (stri
 			return "", time.Time{}, core.Upstream(502, "invalid_json", "token refresh failed: invalid JSON")
 		}
 		if env.Code == nil || *env.Code != 0 {
-			msg := env.Msg
-			if msg == "" {
-				msg = "users/current rejected the refresh token"
-			}
-			return "", time.Time{}, core.Unauthorized(msg)
+			return "", time.Time{}, core.Unauthorized("DeepSeek rejected the refresh token")
 		}
 		token := ""
 		if s, ok := jsonString(env.Data); ok {
@@ -228,6 +224,12 @@ func jsonString(raw json.RawMessage) (string, bool) {
 // before returning data.biz_data, matching api.ts readBizData.
 func (c *apiClient) readBizData(resp *http.Response, action string, out any) error {
 	defer resp.Body.Close()
+	if resp.StatusCode == 429 {
+		return &FileRateLimitError{}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return core.ErrorFromStatus("DeepSeek "+action, resp.StatusCode)
+	}
 	body, err := core.ReadBounded(resp.Body, c.http.MaxJSONBytes)
 	if err != nil {
 		return err
@@ -242,34 +244,26 @@ func (c *apiClient) readBizData(resp *http.Response, action string, out any) err
 		} `json:"data"`
 	}
 	if json.Unmarshal(body, &env) != nil {
-		text := strings.TrimSpace(string(body))
-		if text == "" {
-			text = statusText(resp.StatusCode)
-		}
-		return fmt.Errorf("%s failed: %d %s", action, resp.StatusCode, text)
+		return core.Upstream(502, "invalid_json", "DeepSeek "+action+" returned invalid JSON")
 	}
-	httpOK := resp.StatusCode >= 200 && resp.StatusCode < 300
 	codeOK := env.Code != nil && *env.Code == 0
 	bizOK := env.Data != nil && env.Data.BizCode != nil && *env.Data.BizCode == 0
-	if !httpOK || !codeOK || !bizOK {
-		msg := ""
+	if !codeOK || !bizOK {
+		message := env.Msg
 		if env.Data != nil {
-			msg = env.Data.BizMsg
+			message += " " + env.Data.BizMsg
 		}
-		if msg == "" {
-			msg = env.Msg
+		if rateLimitTextRE.MatchString(message) {
+			return &FileRateLimitError{}
 		}
-		if msg == "" {
-			msg = statusText(resp.StatusCode)
-		}
-		return fmt.Errorf("%s failed: %s", action, msg)
+		return core.Upstream(502, "upstream_rejected", "DeepSeek "+action+" rejected the request")
 	}
 	raw := env.Data.BizData
 	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
-		return fmt.Errorf("%s failed: missing data", action)
+		return core.Upstream(502, "invalid_data", "DeepSeek "+action+" returned incomplete data")
 	}
 	if out != nil && json.Unmarshal(raw, out) != nil {
-		return fmt.Errorf("%s failed: missing data", action)
+		return core.Upstream(502, "invalid_data", "DeepSeek "+action+" returned incomplete data")
 	}
 	return nil
 }
@@ -298,7 +292,7 @@ func (c *apiClient) createConversation(ctx context.Context, refreshToken string)
 		} `json:"chat_session"`
 	}
 	if err := c.readBizData(resp, "createConversation", &out); err != nil {
-		return "", err
+		return "", c.invalidateOnAuth(refreshToken, err)
 	}
 	if out.ChatSession == nil || out.ChatSession.ID == "" {
 		return "", errors.New("createConversation failed: missing chat session id")
@@ -306,19 +300,18 @@ func (c *apiClient) createConversation(ctx context.Context, refreshToken string)
 	return out.ChatSession.ID, nil
 }
 
-// deleteConversation mirrors removeConversation: the response is ignored,
-// cleanup is best-effort like the old service.
-func (c *apiClient) deleteConversation(ctx context.Context, sessionID, refreshToken string) error {
-	accessToken, err := c.acquireToken(ctx, refreshToken)
-	if err != nil {
-		return err
-	}
+// Cleanup uses the token already selected at Open, so closing the refresh
+// cache cannot prevent deletion of an active session.
+func (c *apiClient) deleteConversation(ctx context.Context, sessionID, accessToken string) error {
 	body, _ := json.Marshal(map[string]string{"chat_session_id": sessionID})
 	resp, err := c.postJSON(ctx, sessionDeletePath, accessToken, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return core.ErrorFromStatus("DeepSeek cleanup", resp.StatusCode)
+	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
@@ -340,12 +333,12 @@ func (c *apiClient) solveChallengeFor(ctx context.Context, refreshToken, targetP
 		Challenge *powChallenge `json:"challenge"`
 	}
 	if err := c.readBizData(resp, "get challenge response", &out); err != nil {
-		return "", err
+		return "", c.invalidateOnAuth(refreshToken, err)
 	}
 	if out.Challenge == nil {
 		return "", errors.New("get challenge response failed")
 	}
-	return answerChallenge(*out.Challenge, targetPath, c.opts.PowMaxIterations)
+	return answerChallengeContext(ctx, *out.Challenge, targetPath, c.opts.PowMaxIterations)
 }
 
 type completionMessage struct {
@@ -381,17 +374,16 @@ func (c *apiClient) completionStream(ctx context.Context, refreshToken string, m
 	if err != nil {
 		return nil, err
 	}
-	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		excerpt, _ := core.ReadBounded(resp.Body, 4096)
+	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || ct != "text/event-stream" {
 		resp.Body.Close()
-		text := strings.TrimSpace(string(excerpt))
-		if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
-			text = "rejected by server"
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			c.tokens.Invalidate(refreshToken)
 		}
-		if text == "" {
-			text = statusText(resp.StatusCode)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil, core.Upstream(502, "invalid_content_type", "DeepSeek did not return text/event-stream")
 		}
-		return nil, core.Upstream(resp.StatusCode, "upstream_stream_error", text)
+		return nil, core.ErrorFromStatus("DeepSeek completion", resp.StatusCode)
 	}
 	return &completionStream{sse: core.NewSSEReader(ctx, resp.Body, 4<<20), dec: newDecoder()}, nil
 }
@@ -424,6 +416,9 @@ func (s *completionStream) Next(ctx context.Context) (core.Event, error) {
 			}
 			return core.Event{}, err
 		}
+		if sseEvent.Event == "error" {
+			return core.Event{}, core.Upstream(502, "upstream_stream_error", "DeepSeek stream reported an error")
+		}
 		data := sseEvent.Data
 		if data == "" {
 			continue
@@ -435,6 +430,16 @@ func (s *completionStream) Next(ctx context.Context) (core.Event, error) {
 			}
 			s.done = true
 			continue
+		}
+		var envelope map[string]json.RawMessage
+		if json.Unmarshal([]byte(data), &envelope) != nil {
+			return core.Event{}, core.Upstream(502, "invalid_stream", "DeepSeek stream returned invalid JSON")
+		}
+		if v, ok := envelope["error"]; ok && string(v) != "null" {
+			return core.Event{}, core.Upstream(502, "upstream_stream_error", "DeepSeek stream reported an error")
+		}
+		if v, ok := envelope["code"]; ok && string(v) != "0" {
+			return core.Event{}, core.Upstream(502, "upstream_stream_error", "DeepSeek stream reported an error")
 		}
 		s.queue = append(s.queue, s.dec.handleData(data)...)
 		if s.dec.finished {
@@ -448,6 +453,7 @@ func (s *completionStream) Close() error { return s.sse.Close() }
 // uploadFile ports api.ts uploadFile: the concurrency gate covers resolve,
 // challenge and POST; parse polling happens outside the gate.
 func (c *apiClient) uploadFile(ctx context.Context, refreshToken string, ref core.FileRef, modelType string, thinking bool) (att attachment, err error) {
+	defer func() { err = c.invalidateOnAuth(refreshToken, err) }()
 	release, err := c.uploads.Acquire(ctx, refreshToken)
 	if err != nil {
 		return attachment{}, err
@@ -471,7 +477,9 @@ func (c *apiClient) uploadFile(ctx context.Context, refreshToken string, ref cor
 	if err != nil {
 		return attachment{}, err
 	}
-	return c.getFilePoller(accessToken).WaitFor(ctx, att)
+	poller, releasePoller := c.acquireFilePoller(accessToken)
+	defer releasePoller()
+	return poller.WaitFor(ctx, att)
 }
 
 func (c *apiClient) postUpload(ctx context.Context, accessToken string, input core.FileInput, powResponse, modelType string, thinking bool) (attachment, error) {
@@ -481,8 +489,11 @@ func (c *apiClient) postUpload(ctx context.Context, accessToken string, input co
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	if strings.ContainsAny(input.Filename+contentType, "\r\n") {
+		return attachment{}, core.Invalid("invalid attachment metadata")
+	}
 	partHeader := textproto.MIMEHeader{}
-	partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, escapeQuotes(input.Filename)))
+	partHeader.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": input.Filename}))
 	partHeader.Set("Content-Type", contentType)
 	part, err := writer.CreatePart(partHeader)
 	if err != nil {
@@ -527,36 +538,38 @@ func (c *apiClient) postUpload(ctx context.Context, accessToken string, input co
 	return file, nil
 }
 
-func escapeQuotes(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `"`, `\"`)
+type pollerEntry struct {
+	poller *FileParsePoller
+	users  int
 }
 
-func (c *apiClient) getFilePoller(accessToken string) *FileParsePoller {
+func (c *apiClient) acquireFilePoller(accessToken string) (*FileParsePoller, func()) {
+	key := sha256.Sum256([]byte(accessToken))
 	c.pollersMu.Lock()
-	defer c.pollersMu.Unlock()
-	if existing, ok := c.pollers[accessToken]; ok {
-		return existing
+	entry := c.pollers[key]
+	if entry == nil {
+		entry = &pollerEntry{poller: NewFileParsePoller(c.baseCtx,
+			func(ctx context.Context, ids []string) ([]attachment, error) {
+				return c.fetchFiles(ctx, ids, accessToken)
+			},
+			time.Duration(c.opts.FilePollIntervalMS)*time.Millisecond,
+			time.Duration(c.opts.FileParseTimeoutMS)*time.Millisecond,
+			time.Duration(c.opts.FilePollMaxBackoffMS)*time.Millisecond, nil)}
+		c.pollers[key] = entry
 	}
-	var poller *FileParsePoller
-	poller = NewFileParsePoller(
-		c.baseCtx,
-		func(ctx context.Context, ids []string) ([]attachment, error) {
-			return c.fetchFiles(ctx, ids, accessToken)
-		},
-		time.Duration(c.opts.FilePollIntervalMS)*time.Millisecond,
-		time.Duration(c.opts.FileParseTimeoutMS)*time.Millisecond,
-		time.Duration(c.opts.FilePollMaxBackoffMS)*time.Millisecond,
-		func() {
+	entry.users++
+	c.pollersMu.Unlock()
+	var once sync.Once
+	return entry.poller, func() {
+		once.Do(func() {
 			c.pollersMu.Lock()
-			if c.pollers[accessToken] == poller {
-				delete(c.pollers, accessToken)
+			entry.users--
+			if entry.users == 0 {
+				delete(c.pollers, key)
 			}
 			c.pollersMu.Unlock()
-		},
-	)
-	c.pollers[accessToken] = poller
-	return poller
+		})
+	}
 }
 
 // fetchFiles ports fetchFilesInfo: repeated file_ids query parameters, a

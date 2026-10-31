@@ -3,16 +3,16 @@
 > **本项目由 Qwen3.8 Max 开发**
 
 将 `chat-base` 共用逻辑和网页端 Provider 收敛到一个 Go 项目，通过 Bifrost
-原生插件加载。第一阶段交付 core，第二阶段迁移 DeepSeek、元宝。
+原生插件加载。包含共享 core、DeepSeek 网页 Provider 与元宝网页 Provider。
 
 ## 当前状态
 
 - core、HTTP runtime、原生插件生命周期已实现。
 - Chat Completions、SSE、无状态 Responses、Models 共用同一 Provider 接口。
 - 已验证 race tests、vet，以及真实 `plugin.Open` 加载、请求和卸载。
-- `providers/registry.go` 暂无具体服务；配置未实现的 Provider 会明确启动失败。
-- 动态 Bifrost 镜像的构建配方已提供，尚未构建/部署到生产。现有静态镜像不能加载
-  `.so`；完整 Bifrost 集成属于 Provider 迁移后的验收步骤。
+- DeepSeek、元宝已注册，具备真实 PoW / CDP 签名与合成上游回归测试。
+- 现有静态 Bifrost 镜像不能加载 `.so`；本项目提供完整动态网关构建与隔离集成脚本。
+- 尚未用真实账号联网验收，未修改生产 Bifrost 或旧 Deno 服务。
 
 ## 结构
 
@@ -28,7 +28,8 @@ docs/             设计与 QwenDev 迁移交接
 ```
 
 设计：[DESIGN.md](docs/DESIGN.md)。接口说明：[PROVIDER-SDK.md](docs/PROVIDER-SDK.md)。
-迁移交接：[QWENDEV-HANDOFF.md](docs/QWENDEV-HANDOFF.md)。
+Provider 配置与差异：[PROVIDERS.md](docs/PROVIDERS.md)。
+审核记录：[REVIEW.md](docs/REVIEW.md)。迁移任务记录：[QWENDEV-HANDOFF.md](docs/QWENDEV-HANDOFF.md)。
 
 ## 请求链路
 
@@ -51,6 +52,7 @@ Bifrost custom provider 的 base URL 使用
 `allow_private_network: true`、`base_provider_type: openai`。
 默认请求路径追加 `/v1/chat/completions`、`/v1/models`、`/v1/responses`。
 Provider Key 仍由 Bifrost 管理，插件配置不保存 token/cookie。
+完整配置参考 [examples/bifrost.json](examples/bifrost.json)，其中凭证使用环境变量引用。
 
 ## 验证
 
@@ -70,7 +72,14 @@ go vet ./...
 
 测试不使用线上凭证、不请求真实模型。原生插件测试在动态 Go host 中加载实际 `.so`，
 验证生产插件的启动/卸载与测试 Provider 的 Chat、SSE、Responses。
-它与完整 Bifrost 网关集成是两个不同的检查。
+完整 Bifrost 网关集成另行运行（先构建镜像）：
+
+```sh
+scripts/test-gateway.sh
+```
+
+该测试在无外网容器中启动真实 Bifrost 和合成上游，验证 Chat、SSE、Responses、鉴权、
+选 Key、模型权限、签名头转发和会话清理。
 
 ## 动态 Bifrost 构建
 
@@ -82,8 +91,8 @@ docker build -f deploy/Dockerfile -t local/bifrost-web-providers:dev .
 host 与 `.so` 使用相同 Go 1.27.0、musl、CGO、build tags，并放在同一个 Go
 workspace 统一解析依赖，避免包版本或 ABI 不一致。
 
-现阶段可以使用 `examples/plugin-core-only.json` 测试空注册表的启动。
-`examples/plugin-after-migration.json` 需要两个 Provider 完成后才能使用。
+使用 `examples/plugin-after-migration.json` 启用两个 Provider；
+`examples/plugin-core-only.json` 用于仅启动插件入口。
 本项目不修改现有线上 Docker Compose、数据库或 Deno 服务。
 
 ## 兼容边界

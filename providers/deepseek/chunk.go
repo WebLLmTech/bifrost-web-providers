@@ -39,13 +39,13 @@ type fragmentQuery struct {
 }
 
 type fragment struct {
-	ID      int            `json:"id"`
-	Type    string         `json:"type"`
-	Content *string        `json:"content"`
-	Status  string         `json:"status"`
+	ID      int             `json:"id"`
+	Type    string          `json:"type"`
+	Content *string         `json:"content"`
+	Status  string          `json:"status"`
 	Queries []fragmentQuery `json:"queries"`
-	Results []searchResult `json:"results"`
-	Result  *searchResult  `json:"result"`
+	Results []searchResult  `json:"results"`
+	Result  *searchResult   `json:"result"`
 }
 
 type patchChunk struct {
@@ -196,7 +196,11 @@ func (d *decoder) handlePatch(path string, value json.RawMessage, emit func(...c
 
 	if strings.HasSuffix(path, "/content") {
 		if s, ok := rawString(value); ok {
-			d.writeFragmentContent(s, emit)
+			typ := d.currentType
+			if frag := d.fragmentByPath(path); frag != nil {
+				typ = frag.Type
+			}
+			d.writeContent(typ, s, emit)
 		}
 	}
 }
@@ -300,8 +304,12 @@ func (d *decoder) writeToolEvent(key, content string, emit func(...core.Event)) 
 }
 
 func (d *decoder) writeFragmentContent(content string, emit func(...core.Event)) {
+	d.writeContent(d.currentType, content, emit)
+}
+
+func (d *decoder) writeContent(typ, content string, emit func(...core.Event)) {
 	formatted := formatContent(content)
-	switch d.currentType {
+	switch typ {
 	case "THINK":
 		emit(core.Event{Kind: core.EventReasoning, Text: formatted})
 	case "RESPONSE":

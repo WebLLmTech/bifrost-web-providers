@@ -92,8 +92,8 @@ func TestDecoderToolSearchStartResultsAndCitations(t *testing.T) {
 
 	// A brand-new URL is emitted on its own.
 	out = d.handleData(`{"o":"REPLACE","p":"response/fragments/0/results","v":[{"url":"https://c.example/3","title":"C"}]}`)
-	if len(out) != 2 || out[1].Kind != core.EventCitations || len(out[1].Citations) != 1 ||
-		string(out[1].Citations[0]) != `"https://c.example/3"` {
+	if len(out) != 1 || out[0].Kind != core.EventCitations || len(out[0].Citations) != 1 ||
+		string(out[0].Citations[0]) != `"https://c.example/3"` {
 		t.Fatalf("unexpected fresh citation events: %s", eventsText(out))
 	}
 }
@@ -183,9 +183,9 @@ func TestDecoderIgnoresMalformedAndStrayData(t *testing.T) {
 	d := newDecoder()
 	for _, data := range []string{
 		`not json`,
-		`{"o":"ADD"}`,              // no v, no p
-		`{"o":"ADD","v":"stray"}`,  // string v before any fragment type
-		`{"o":"ADD","v":123}`,      // non-string scalar v
+		`{"o":"ADD"}`,             // no v, no p
+		`{"o":"ADD","v":"stray"}`, // string v before any fragment type
+		`{"o":"ADD","v":123}`,     // non-string scalar v
 		`{"o":"REPLACE","p":"response/fragments/-1/content","v":7}`, // non-string content
 	} {
 		if out := d.handleData(data); len(out) != 0 {

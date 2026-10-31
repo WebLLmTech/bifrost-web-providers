@@ -100,4 +100,5 @@ scripts/check.sh
 scripts/test-plugin.sh
 ```
 
-全量动态 Bifrost 镜像的构建和实际网关协议回归仍需在两项迁移之后执行。
+完整网关检查使用 deploy/Dockerfile 构建后运行 scripts/test-gateway.sh。
+共享历史序列化使用 core.PromptText，保留 assistant 工具调用和工具结果。

@@ -89,7 +89,7 @@ scripts/manage-bifrost.py 是显式执行的运维工具，不在测试或插件
 SQLite 快照与 Provider 配置快照；快照不可提交到仓库。
 
 执行顺序：inspect → backup → 构建并切换动态镜像/挂载匹配的 .so →
-configure → test。configure 更新已有 deepseek-web、yuanbao-web、modelscope、
+configure → verify → test。configure 更新已有 deepseek-web、yuanbao-web、modelscope、
 qwen 的目标地址，并核对 Key/别名/权重不变。回滚使用 rollback 恢复 Provider/
 插件设置，再恢复原镜像；若要恢复旧 ModelScope 路径，需要重新启动旧适配容器。
 

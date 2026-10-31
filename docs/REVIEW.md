@@ -55,3 +55,12 @@ JSON 校验不自动追加整理请求，以及当前未做真实账号联网验
 - 测试启动时使用本地空 pricing/model-parameters datasheet，关闭 MCP catalog
   背景同步；没有依赖外网下载价格表。SSE 断言重组实际 delta 后校验内容。
 - 真实网页账号、线上 Qimei SDK 与 Browserless 页面未联网验证；元宝附件仍明确拒绝。
+
+
+## 后续真实部署验收
+
+用户随后授权替换 Bifrost 同名 Provider 配置并测试真实账号。
+ModelScope 已迁入同一原生插件；元宝真实控制帧兼容已补齐并上线。
+DeepSeek、元宝普通/SSE 均返回 OK；DeepSeek 只在选择有效 Key 时通过，
+池内旧 Token 的 401 未通过改 Key 状态掩盖。详细结果和限制见
+[DEPLOYMENT-20261031.md](DEPLOYMENT-20261031.md)。

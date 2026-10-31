@@ -13,7 +13,8 @@
 - DeepSeek、元宝、ModelScope 已注册，具备真实 PoW / CDP 签名 / 异步图像协议与合成上游回归测试。
 - 完整动态 Bifrost 镜像已构建，真实网关的离线模拟上游回归已通过。
   现有静态 Bifrost 镜像不能加载 `.so`。
-- 尚未用真实账号联网验收，未修改生产 Bifrost 或旧 Deno 服务。
+- DeepSeek、元宝已切入线上 Bifrost 并通过普通/SSE 实测；DeepSeek 测试使用有效 Key，
+  原池中旧 Token 仍可能导致随机轮换 401。ModelScope 图像已通过离线网关回归。
 
 ## 结构
 
@@ -31,6 +32,7 @@ docs/             设计与 QwenDev 迁移交接
 设计：[DESIGN.md](docs/DESIGN.md)。接口说明：[PROVIDER-SDK.md](docs/PROVIDER-SDK.md)。
 Provider 配置与差异：[PROVIDERS.md](docs/PROVIDERS.md)。
 部署结构与现有 ModelScope 迁移：[MODELSCOPE.md](docs/MODELSCOPE.md)。
+实际部署与调用结果：[DEPLOYMENT-20261031.md](docs/DEPLOYMENT-20261031.md)。
 审核记录：[REVIEW.md](docs/REVIEW.md)。迁移任务记录：[QWENDEV-HANDOFF.md](docs/QWENDEV-HANDOFF.md)。
 
 ## 请求链路
@@ -98,7 +100,7 @@ workspace 统一解析依赖，避免包版本或 ABI 不一致。
 
 使用 `examples/plugin-after-migration.json` 启用两个 Provider；
 `examples/plugin-core-only.json` 用于仅启动插件入口。
-本项目不修改现有线上 Docker Compose、数据库或 Deno 服务。
+部署记录见 docs/DEPLOYMENT-20261031.md；私有配置与数据库备份不入库。
 
 ## 兼容边界
 

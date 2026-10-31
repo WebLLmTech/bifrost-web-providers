@@ -103,7 +103,8 @@ elif args.mode == "configure":
             "modelscope": {"type": "modelscope", "options": {"base_url": "https://api-inference.modelscope.ai", "timeout_seconds": 540, "max_result_mb": 64}}
         }}
     plugin_body = {"enabled": True, "path": "/plugins/web-providers.so", "config": plugin_config}
-    if saved["plugin"] is None:
+    exists = any(p["name"] == "web-providers" for p in api("GET", "/api/plugins")["plugins"])
+    if not exists:
         api("POST", "/api/plugins", {"name": "web-providers", **plugin_body})
     else:
         api("PUT", "/api/plugins/web-providers", plugin_body)

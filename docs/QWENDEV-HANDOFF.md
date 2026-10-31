@@ -1,5 +1,7 @@
 # QwenDev 迁移任务
 
+> 历史交接记录。当前工具链与 Bifrost 版本以 go.mod 和 deploy/Dockerfile 为准。
+
 用户要求：本项目 core 由 Codex 实现，完成后交给 QwenDev Agent 迁移 DeepSeek、元宝。
 本文件是固定 core 接口和验收边界。阅读 AGENTS.md、DESIGN.md、PROVIDER-SDK.md 后开发。
 

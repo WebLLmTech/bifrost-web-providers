@@ -134,6 +134,21 @@ func run() error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	if expected := os.Getenv("EXPECTED_BIFROST_VERSION"); expected != "" {
+		response, callErr := client.Get(base + "/api/version")
+		if callErr != nil {
+			err = callErr
+			return err
+		}
+		raw, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		var actual string
+		if response.StatusCode != 200 || json.Unmarshal(raw, &actual) != nil || actual != expected {
+			err = fmt.Errorf("Bifrost version mismatch: expected %s, got %s", expected, raw)
+			return err
+		}
+		fmt.Println("PASS real Bifrost version", actual)
+	}
 	request := func(path string, body any, auth bool) (int, []byte, error) {
 		b, _ := json.Marshal(body)
 		req, e := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(b))

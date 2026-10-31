@@ -1,5 +1,5 @@
 // A real dynamically linked native Go plugin loader, exercising the same three
-// lifecycle symbols used by Bifrost 2.2.6. It is not a mock of plugin.Open.
+// lifecycle symbols used by Bifrost native plugins. It is not a mock of plugin.Open.
 package main
 
 import (

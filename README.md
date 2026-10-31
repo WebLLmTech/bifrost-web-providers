@@ -71,7 +71,7 @@ scripts/check.sh
 scripts/test-plugin.sh
 ```
 
-已有 Go 1.27.0：
+已有 Go 1.27.3：
 
 ```sh
 go test -race ./...
@@ -95,8 +95,8 @@ scripts/test-gateway.sh
 docker build -f deploy/Dockerfile -t local/bifrost-web-providers:dev .
 ```
 
-基于 Bifrost `transports/v2.2.6` 对应的固定提交构建完整 UI 和动态网关。
-host 与 `.so` 使用相同 Go 1.27.0、musl、CGO、build tags，并放在同一个 Go
+基于 Bifrost `transports/v2.4.0` 对应的固定提交构建完整 UI 和动态网关。
+host 与 `.so` 使用相同 Go 1.27.3、musl、CGO、build tags，并放在同一个 Go
 workspace 统一解析依赖，避免包版本或 ABI 不一致。
 
 使用 `examples/plugin-after-migration.json` 启用两个 Provider；

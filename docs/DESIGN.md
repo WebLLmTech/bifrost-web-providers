@@ -70,10 +70,10 @@ collision with its built-in official DeepSeek provider.
 
 ## Runtime constraint
 
-The installed Bifrost 2.2.6 image is musl/static and reports `Dynamic loading
-not supported` for `.so`. Production native loading requires a dynamically
-linked build. Pin Go 1.27.0 and upstream commit
-`8b4fce4f1709d66f9208d02f50552da522535f9e`; build the host and plugin together
+The original Bifrost 2.2.6 image was musl/static and reported `Dynamic loading
+not supported` for `.so`. Production native loading uses a dynamically
+linked build. Current builds pin Go 1.27.3 and Bifrost v2.4.0 commit
+`e869c3f9adc96ea53c38694a21bb04a8e1085487`; build the host and plugin together
 with the same Go/CGO/libc/trimpath settings. The project includes a build recipe
 and a dynamic native-plugin smoke host. Development may run the same runtime
 as a standalone process; production architecture is the in-process plugin.

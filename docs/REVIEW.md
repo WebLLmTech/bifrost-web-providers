@@ -42,3 +42,16 @@ JSON 校验不自动追加整理请求，以及当前未做真实账号联网验
 
 验证脚本是可复现入口；真实账号、真实 Browserless 页面与线上反爬环境未经过验证。
 此次不修改生产容器或 Deno 服务。
+
+
+## 本次验证结果（2026-10-31）
+
+- 全仓 race tests、vet 和原生 plugin.Open 检查通过。
+- DeepSeek 原始 WASM 的 22 组向量独立校验通过。
+- deploy/Dockerfile 的完整动态 Bifrost 镜像构建成功（Go 1.27.0 / musl / CGO）。
+- 无外网容器中的真实 Bifrost 集成通过：两服务的普通/流式 Chat、普通/流式
+  Responses、JSON schema、跨块工具标记，及鉴权、选 Key、模型权限、别名和签名头。
+  17 个合成测试会话全部删除。
+- 测试启动时使用本地空 pricing/model-parameters datasheet，关闭 MCP catalog
+  背景同步；没有依赖外网下载价格表。SSE 断言重组实际 delta 后校验内容。
+- 真实网页账号、线上 Qimei SDK 与 Browserless 页面未联网验证；元宝附件仍明确拒绝。

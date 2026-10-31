@@ -20,3 +20,7 @@ node providers/deepseek/testdata/verify.mjs /path/to/sha3_wasm_bg.7b9ca65ddd.was
 
 也可使用 Deno 运行，授权只读文件访问。接管审核时已经对原始二进制执行交叉验证：
 22 个向量全部通过。此验证只证明算法等价，不能替代线上账号/反爬环境验证。
+
+本次校验资源来自 deepseek-deno-api 提交
+`1ae763feaa1244f5c580123c2714bcdd9a2a5094`，WASM 的 SHA-256 为
+`b3fca8cc072c1defbd60c02266a8e48bd307a1804aaff4314900aea720e72f7d`。

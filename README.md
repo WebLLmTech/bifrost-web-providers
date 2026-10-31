@@ -11,7 +11,8 @@
 - Chat Completions、SSE、无状态 Responses、Models 共用同一 Provider 接口。
 - 已验证 race tests、vet，以及真实 `plugin.Open` 加载、请求和卸载。
 - DeepSeek、元宝已注册，具备真实 PoW / CDP 签名与合成上游回归测试。
-- 现有静态 Bifrost 镜像不能加载 `.so`；本项目提供完整动态网关构建与隔离集成脚本。
+- 完整动态 Bifrost 镜像已构建，真实网关的离线模拟上游回归已通过。
+  现有静态 Bifrost 镜像不能加载 `.so`。
 - 尚未用真实账号联网验收，未修改生产 Bifrost 或旧 Deno 服务。
 
 ## 结构

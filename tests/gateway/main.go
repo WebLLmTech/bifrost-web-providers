@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -56,6 +57,15 @@ func run() error {
 			map[string]any{"provider": "yuanbao-web", "allowed_models": []string{"deep_seek_v3", "hunyuan_t1"}, "key_ids": []string{"*"}, "weight": 1},
 		}}}},
 	}
+	catalogPath := filepath.Join(dir, "catalog.json")
+	if err = os.WriteFile(catalogPath, []byte("{}"), 0600); err != nil {
+		return err
+	}
+	config["$schema"] = "https://www.getbifrost.ai/schema"
+	config["framework"] = map[string]any{"pricing": map[string]any{
+		"pricing_url": "file://" + catalogPath, "model_parameters_url": "file://" + catalogPath,
+		"mcp_library_sync_interval": 0, "live_models_sync_interval": 0,
+	}}
 	raw, _ := json.Marshal(config)
 	if err = os.WriteFile(filepath.Join(dir, "config.json"), raw, 0600); err != nil {
 		return err
@@ -71,25 +81,33 @@ func run() error {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	processDone := make(chan struct{})
+	var processErr error
+	go func() { processErr = cmd.Wait(); close(processDone) }()
 	defer func() {
 		cmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { cmd.Wait(); close(done) }()
 		select {
-		case <-done:
+		case <-processDone:
 		case <-time.After(10 * time.Second):
 			cmd.Process.Kill()
-			<-done
+			<-processDone
 		}
 		if err != nil {
 			b, _ := os.ReadFile(filepath.Join(dir, "gateway.log"))
 			fmt.Fprintln(os.Stderr, string(b))
 		}
 	}()
+
 	base := "http://127.0.0.1:18880"
 	client := &http.Client{Timeout: 15 * time.Second}
 	deadline := time.Now().Add(60 * time.Second)
 	for {
+		select {
+		case <-processDone:
+			err = fmt.Errorf("Bifrost exited before readiness: %v", processErr)
+			return err
+		default:
+		}
 		res, e := client.Get(base + "/health")
 		if e == nil {
 			res.Body.Close()
@@ -135,7 +153,7 @@ func run() error {
 	for _, model := range []string{"deepseek-web/deepseek", "yuanbao-web/deep_seek_v3"} {
 		for _, stream := range []bool{false, true} {
 			status, data, e = request("/v1/chat/completions", chatBody(model, stream), true)
-			if e != nil || status != 200 || !bytes.Contains(data, []byte("fixture answer")) {
+			if e != nil || status != 200 || !strings.Contains(outputText(data, stream), "fixture answer") {
 				err = fmt.Errorf("chat %s stream %v: status %d body %s err %v", model, stream, status, data, e)
 				return err
 			}
@@ -148,7 +166,7 @@ func run() error {
 		for _, stream := range []bool{false, true} {
 			body := map[string]any{"model": model, "input": "hello", "stream": stream}
 			status, data, e = request("/v1/responses", body, true)
-			if e != nil || status != 200 || !bytes.Contains(data, []byte("fixture answer")) {
+			if e != nil || status != 200 || !strings.Contains(outputText(data, stream), "fixture answer") {
 				err = fmt.Errorf("responses %s stream %v: status %d body %s err %v", model, stream, status, data, e)
 				return err
 			}
@@ -295,4 +313,38 @@ func fixtureOutput(r *http.Request) string {
 		return `{"ok":true}`
 	}
 	return "fixture answer"
+}
+
+func outputText(data []byte, stream bool) string {
+	if !stream {
+		return string(data)
+	}
+	var b strings.Builder
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var chunk struct {
+			Type    string `json:"type"`
+			Delta   string `json:"delta"`
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk) != nil {
+			continue
+		}
+		for _, choice := range chunk.Choices {
+			b.WriteString(choice.Delta.Content)
+		}
+		if chunk.Type == "response.output_text.delta" {
+			b.WriteString(chunk.Delta)
+		}
+	}
+	return b.String()
 }

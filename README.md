@@ -1,5 +1,7 @@
 # bifrost-web-providers
 
+> **本项目由 Qwen3.8 Max 开发**
+
 将 `chat-base` 共用逻辑和网页端 Provider 收敛到一个 Go 项目，通过 Bifrost
 原生插件加载。第一阶段交付 core，第二阶段迁移 DeepSeek、元宝。
 

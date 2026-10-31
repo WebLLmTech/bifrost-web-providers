@@ -103,3 +103,8 @@ BIFROST_IMAGE=bifrost-web-providers:modelscope scripts/test-gateway.sh
 
 普通测试不使用生产凭证。真实调用仅由明确授权的 manage-bifrost.py test 触发，
 复用现有虚拟 Key，输出有界结果和状态，不打印凭证。
+
+
+后续经用户明确授权，可使用 manage-bifrost.py disable-invalid，读取同一私有 state
+目录中的 DeepSeek 审计结果，仅禁用已确认的 40003 invalid token，并将原别名保留到
+有效 Key。此操作另存私有回滚记录，不修改凭证值和权重；不属于默认 configure 行为。

@@ -17,7 +17,7 @@ import urllib.request
 import urllib.parse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("mode", choices=["inspect", "backup", "configure", "rollback", "verify", "test"])
+parser.add_argument("mode", choices=["inspect", "backup", "configure", "rollback", "verify", "test", "disable-invalid"])
 parser.add_argument("--gateway", default="http://chat:8080")
 parser.add_argument("--database", default="/diagnostic/config.db")
 parser.add_argument("--state", default="/state")
@@ -152,6 +152,62 @@ elif args.mode == "rollback":
         before = saved["plugin"]
         api("PUT", "/api/plugins/web-providers", {k: before[k] for k in ["enabled", "path", "config", "placement", "order"] if k in before})
     print("Restored provider routes and plugin configuration.")
+elif args.mode == "disable-invalid":
+    audit_path = state_dir / "deepseek-token-audit.json"
+    audit = json.loads(audit_path.read_text())
+    invalid = {r["key_id"] for r in audit if not r.get("valid") and r.get("code") == 40003 and "invalid token" in r.get("message", "").lower()}
+    valid = {r["key_id"] for r in audit if r.get("valid")}
+    uncertain = len(audit) - len(invalid) - len(valid)
+    records = api("GET", "/api/providers/deepseek-web/keys")["keys"]
+    by_id = {r["id"]: r for r in records}
+    if not invalid.issubset(by_id) or not valid.issubset(by_id):
+        raise RuntimeError("Audited key set changed; run a fresh audit")
+    before_db = {r["key_id"]: dict(r) for r in db.execute("SELECT * FROM config_keys")}
+    aliases = {}
+    for record in records:
+        for alias, target in (record.get("aliases") or {}).items():
+            if alias in aliases and aliases[alias] != target:
+                raise RuntimeError("Conflicting aliases require explicit mapping")
+            aliases[alias] = target
+    fd = os.open(state_dir / "keys-before-disable.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"keys": records, "disable_ids": sorted(invalid), "valid_ids": sorted(valid)}, f, indent=2)
+    synced = []
+    # Keep existing public aliases usable after their old owning key is disabled.
+    for key_id in sorted(valid):
+        record = copy.deepcopy(by_id[key_id])
+        combined = {**aliases, **(record.get("aliases") or {})}
+        if combined != (record.get("aliases") or {}):
+            record["aliases"] = combined
+            api("PUT", "/api/providers/deepseek-web/keys/" + key_id, record)
+            synced.append(key_id)
+    disabled = []
+    for key_id in sorted(invalid):
+        record = copy.deepcopy(by_id[key_id])
+        if record.get("enabled", True):
+            record["enabled"] = False
+            api("PUT", "/api/providers/deepseek-web/keys/" + key_id, record)
+            disabled.append(key_id)
+    after_db = {r["key_id"]: dict(r) for r in db.execute("SELECT * FROM config_keys")}
+    if set(before_db) != set(after_db):
+        raise RuntimeError("Key inventory changed during update")
+    fields = ["provider", "key_id", "name", "value", "models_json", "blacklisted_models_json", "weight"]
+    for key_id, before in before_db.items():
+        after = after_db[key_id]
+        for field in fields:
+            old = json.loads(before[field] or "null") if field.endswith("_json") else before[field]
+            new = json.loads(after[field] or "null") if field.endswith("_json") else after[field]
+            if old != new:
+                raise RuntimeError("Unexpected key metadata change in " + field)
+        if bool(after["enabled"]) != (False if key_id in invalid else bool(before["enabled"])):
+            raise RuntimeError("Unexpected key enable state")
+        if key_id not in synced and json.loads(before["aliases_json"] or "{}") != json.loads(after["aliases_json"] or "{}"):
+            raise RuntimeError("Unexpected alias change")
+    summary = {"checked": len(audit), "disabled": len(disabled), "valid": len(valid), "uncertain": uncertain, "alias_synced_keys": len(synced), "aliases_preserved": len(aliases)}
+    fd = os.open(state_dir / "disable-result.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:json.dump(summary, f, indent=2)
+    print(json.dumps(summary))
+    print("All credential values, model restrictions and weights preserved.")
 elif args.mode == "test":
     # Admin session authenticates management. Inference uses an existing active
     # virtual key loaded only in memory; no provider token is exported.

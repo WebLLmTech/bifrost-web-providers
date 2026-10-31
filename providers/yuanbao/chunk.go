@@ -25,10 +25,11 @@ func cleanMarkers(s string) string {
 }
 
 type completionStream struct {
-	sse   *core.SSEReader
-	queue []core.Event
-	done  bool
-	seen  map[string]bool
+	sse        *core.SSEReader
+	queue      []core.Event
+	done       bool
+	seen       map[string]bool
+	seenAnswer bool
 }
 
 func (s *completionStream) Close() error { return s.sse.Close() }
@@ -37,6 +38,12 @@ func (s *completionStream) Next(ctx context.Context) (core.Event, error) {
 		if len(s.queue) > 0 {
 			e := s.queue[0]
 			s.queue = s.queue[1:]
+			if e.Kind == core.EventContent && e.Text != "" {
+				s.seenAnswer = true
+			}
+			if e.Kind == core.EventFinish && !s.seenAnswer {
+				return core.Event{}, core.Upstream(502, "empty_completion", "Yuanbao returned no answer")
+			}
 			return e, nil
 		}
 		if s.done {
@@ -57,8 +64,19 @@ func (s *completionStream) Next(ctx context.Context) (core.Event, error) {
 			continue
 		}
 		if data == "[DONE]" || data == "[done]" || event.Event == "done" {
+			if !s.seenAnswer {
+				return core.Event{}, core.Upstream(502, "empty_completion", "Yuanbao returned no answer")
+			}
 			s.done = true
 			return core.Event{Kind: core.EventFinish, FinishReason: "stop"}, nil
+		}
+		// Yuanbao emits speech mode and bracketed metadata alongside JSON.
+		// These frames are control information, not assistant content.
+		if event.Event == "speech_type" {
+			continue
+		}
+		if strings.HasSuffix(data, "]") && (strings.HasPrefix(data, "[plugin:") || strings.HasPrefix(data, "[MSGINDEX:") || strings.HasPrefix(data, "[TRACEID:")) {
+			continue
 		}
 		// The service sends textual heartbeat events alongside JSON chunks.
 		if data == "ping" || data == "heartbeat" {

@@ -17,10 +17,13 @@ import urllib.request
 import urllib.parse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("mode", choices=["inspect", "backup", "configure", "rollback", "test"])
+parser.add_argument("mode", choices=["inspect", "backup", "configure", "rollback", "verify", "test"])
 parser.add_argument("--gateway", default="http://chat:8080")
 parser.add_argument("--database", default="/diagnostic/config.db")
 parser.add_argument("--state", default="/state")
+parser.add_argument("--provider", choices=["deepseek-web","yuanbao-web"])
+parser.add_argument("--pin-first-key", action="store_true")
+parser.add_argument("--key-id")
 args = parser.parse_args()
 db = sqlite3.connect("file:" + args.database + "?mode=ro", uri=True)
 db.row_factory = sqlite3.Row
@@ -49,10 +52,10 @@ def payload(provider):
               "custom_provider_config", "openai_config", "prompt_cache"]
     return {k: copy.deepcopy(provider[k]) for k in fields if k in provider}
 
-def keys_fingerprint():
-    rows = db.execute("SELECT * FROM config_keys ORDER BY provider,key_id").fetchall()
+def keys_fingerprint(connection=db):
+    rows = connection.execute("SELECT * FROM config_keys ORDER BY provider,key_id").fetchall()
     fields = ["provider", "key_id", "name", "value", "models_json", "blacklisted_models_json", "aliases_json", "weight", "enabled"]
-    logical = [{k: row[k] for k in fields if k in row.keys()} for row in rows]
+    logical = [{k: (json.loads(row[k] or "null") if k.endswith("_json") else row[k]) for k in fields if k in row.keys()} for row in rows]
     return hashlib.sha256(json.dumps(logical, sort_keys=True).encode()).hexdigest()
 
 def providers():
@@ -121,9 +124,23 @@ elif args.mode == "configure":
             allowed.update(image_generation=True, image_edit=True, image_generation_stream=False, image_edit_stream=False)
         api("PUT", "/api/providers/" + name, target)
         print("Configured existing provider", name, "->", network["base_url"])
-    if keys_fingerprint() != saved["keys_fingerprint"]:
+    original_db=sqlite3.connect("file:"+str(state_dir/"config-before.db")+"?mode=ro&immutable=1",uri=True)
+    original_db.row_factory=sqlite3.Row
+    if keys_fingerprint() != keys_fingerprint(original_db):
         raise RuntimeError("Provider key metadata changed; investigate before continuing")
     print("Provider keys, aliases, model restrictions and weights unchanged.")
+elif args.mode == "verify":
+    original_db=sqlite3.connect("file:"+str(state_dir/"config-before.db")+"?mode=ro&immutable=1",uri=True)
+    original_db.row_factory=sqlite3.Row
+    if keys_fingerprint()!=keys_fingerprint(original_db):
+        raise RuntimeError("Provider key metadata changed")
+    print("Verified all existing keys, aliases, restrictions and weights unchanged (semantic JSON comparison).")
+    for name in names:
+        p=api("GET","/api/providers/"+name)
+        expected="http://127.0.0.1:8792/providers/"+("modelscope" if name in ["modelscope","qwen"] else name)
+        if p.get("network_config",{}).get("base_url")!=expected:
+            raise RuntimeError("Unexpected provider endpoint for "+name)
+        print(name+" -> "+expected)
 elif args.mode == "rollback":
     saved = json.loads(state_file.read_text())
     for name, original in saved["providers"].items():
@@ -166,8 +183,9 @@ elif args.mode == "test":
             break
     if not token:
         raise SystemExit("Could not resolve the existing virtual key without exporting credentials")
-    for name in names[:2]:
-        records = db.execute("SELECT aliases_json FROM config_keys WHERE provider=? AND enabled=1", (name,)).fetchall()
+    failures=0
+    for name in ([args.provider] if args.provider else names[:2]):
+        records = db.execute("SELECT key_id,aliases_json FROM config_keys WHERE provider=? AND enabled=1", (name,)).fetchall()
         aliases = {}
         for record in records:
             aliases.update(json.loads(record["aliases_json"] or "{}"))
@@ -175,7 +193,7 @@ elif args.mode == "test":
         for stream in [False, True]:
             body = {"model": name + "/" + model, "messages": [{"role": "user", "content": "只回复 OK"}], "stream": stream}
             req = urllib.request.Request(args.gateway + "/v1/chat/completions", method="POST",
-                headers={"x-bf-vk": token, "Content-Type": "application/json"},
+                headers={"x-bf-vk": token, "Content-Type": "application/json", **({"x-bf-api-key-id": next((r["key_id"] for r in records if json.loads(r["aliases_json"] or "{}")), records[0]["key_id"])} if args.pin_first_key else {}), **({"x-bf-api-key-id":args.key_id} if args.key_id else {})},
                 data=json.dumps(body).encode())
             started = time.monotonic()
             try:
@@ -185,10 +203,12 @@ elif args.mode == "test":
                     errors = [c.get("error") for c in chunks if c.get("error")]
                     text = "".join(choice.get("delta" if stream else "message", {}).get("content") or "" for c in chunks for choice in c.get("choices", []))
                     finish = [choice.get("finish_reason") for c in chunks for choice in c.get("choices", []) if choice.get("finish_reason")]
+                    if errors or not finish or not text.strip():failures+=1
                     print(json.dumps({"provider": name, "model_alias": model, "stream": stream, "status": response.status,
                         "seconds": round(time.monotonic() - started, 2), "content": text[:100], "finished": bool(finish),
                         "errors": errors}, ensure_ascii=False))
             except urllib.error.HTTPError as error:
+                failures+=1
                 body = error.read().decode()
                 # Scrub all provider tokens and the virtual/admin key before printing a bounded diagnostic.
                 secrets = [token, session]
@@ -205,3 +225,6 @@ elif args.mode == "test":
                     if secret:
                         body = body.replace(secret, "[redacted]")
                 print(json.dumps({"provider": name, "model_alias": model, "stream": stream, "status": error.code, "error": body[:1200]}, ensure_ascii=False))
+
+    if failures:
+        raise SystemExit(f"{failures} live calls failed")

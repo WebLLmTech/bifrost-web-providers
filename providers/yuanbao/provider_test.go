@@ -358,3 +358,16 @@ func TestSignatureTupleAndConfigurationValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestSpeechAndBracketControlFrames(t *testing.T) {
+	data := "data: {\"type\":\"text\",\"msg\":\"O\"}\n\nevent: speech_type\ndata: status\n\nevent: speech_type\ndata: text\n\ndata: {\"type\":\"text\",\"msg\":\"K\"}\n\ndata: [plugin: ]\n\ndata: [MSGINDEX:2]\n\ndata: [TRACEID:synthetic-trace]\n\ndata: [DONE]\n\n"
+	s := &completionStream{sse: core.NewSSEReader(context.Background(), io.NopCloser(strings.NewReader(data)), 4096)}
+	result, err := core.Collect(context.Background(), s, core.ChatConfig{}, 4096)
+	if err != nil || result.Content != "OK" {
+		t.Fatalf("%+v %v", result, err)
+	}
+	s = &completionStream{sse: core.NewSSEReader(context.Background(), io.NopCloser(strings.NewReader("data: [TRACEID:synthetic]\n\ndata: [DONE]\n\n")), 4096)}
+	if _, err = core.Collect(context.Background(), s, core.ChatConfig{}, 4096); err == nil {
+		t.Fatal("metadata-only stream accepted as an answer")
+	}
+}

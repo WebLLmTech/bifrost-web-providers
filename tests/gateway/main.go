@@ -339,7 +339,7 @@ func mock(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			w.(http.Flusher).Flush()
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		fmt.Fprint(w, "event: speech_type\ndata: status\n\nevent: speech_type\ndata: text\n\ndata: [plugin: ]\n\ndata: [MSGINDEX:2]\n\ndata: [TRACEID:synthetic]\n\ndata: [DONE]\n\n")
 
 	default:
 		http.NotFound(w, r)

@@ -11,7 +11,7 @@
 - Chat Completions、SSE、无状态 Responses、Models 共用同一 Provider 接口。
 - 已验证 race tests、vet，以及真实 `plugin.Open` 加载、请求和卸载。
 - DeepSeek、元宝、ModelScope 已注册，具备真实 PoW / CDP 签名 / 异步图像协议与合成上游回归测试。
-- 完整动态 Bifrost 镜像已构建，真实网关的离线模拟上游回归已通过。
+- 已部署 Bifrost v2.4.0 动态镜像，真实网关的离线模拟上游回归已通过。
   现有静态 Bifrost 镜像不能加载 `.so`。
 - DeepSeek、元宝已切入线上 Bifrost 并通过普通/SSE 实测；7 枚确认失效的 DeepSeek
   Token 已禁用，6 枚有效 Token 的随机调用复测通过。ModelScope 图像已通过离线网关回归。
@@ -34,6 +34,7 @@ Provider 配置与差异：[PROVIDERS.md](docs/PROVIDERS.md)。
 部署结构与现有 ModelScope 迁移：[MODELSCOPE.md](docs/MODELSCOPE.md)。
 实际部署与调用结果：[DEPLOYMENT-20261031.md](docs/DEPLOYMENT-20261031.md)。
 后续 Token/容器清理与内存实测：[RETIRE-LEGACY-20261031.md](docs/RETIRE-LEGACY-20261031.md)。
+v2.4.0 升级、复测与 Docker 清理：[UPGRADE-V2.4.0-20261031.md](docs/UPGRADE-V2.4.0-20261031.md)。
 审核记录：[REVIEW.md](docs/REVIEW.md)。迁移任务记录：[QWENDEV-HANDOFF.md](docs/QWENDEV-HANDOFF.md)。
 
 ## 请求链路
@@ -98,6 +99,8 @@ docker build -f deploy/Dockerfile -t local/bifrost-web-providers:dev .
 基于 Bifrost `transports/v2.4.0` 对应的固定提交构建完整 UI 和动态网关。
 host 与 `.so` 使用相同 Go 1.27.3、musl、CGO、build tags，并放在同一个 Go
 workspace 统一解析依赖，避免包版本或 ABI 不一致。
+官方镜像中的静态 Bifrost 二进制无法加载当前 Go `.so`；在其上仅复制插件仍不能运行。
+本项目保持官方版本业务源码不变，调整链接方式并同时构建 host 和插件。
 
 使用 `examples/plugin-after-migration.json` 启用两个 Provider；
 `examples/plugin-core-only.json` 用于仅启动插件入口。

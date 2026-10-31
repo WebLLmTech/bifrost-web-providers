@@ -47,14 +47,14 @@ func run() error {
 	providers := map[string]any{}
 	credentials := map[string]string{"deepseek-web": "synthetic-refresh", "yuanbao-web": "token:synthetic-token agentId:agent hy_user:user"}
 	for name, value := range credentials {
-		providers[name] = map[string]any{"keys": []any{map[string]any{"id": name + "-key", "name": "fixture", "value": value, "models": []string{"*"}, "weight": 1, "is_active": true, "aliases": map[string]string{"fixture-alias": map[string]string{"deepseek-web": "deepseek", "yuanbao-web": "deep_seek_v3"}[name]}}},
+		providers[name] = map[string]any{"keys": []any{map[string]any{"id": name + "-key", "name": "fixture", "value": value, "models": []string{"*"}, "weight": 1, "enabled": true, "aliases": map[string]string{"fixture-alias": map[string]string{"deepseek-web": "deepseek", "yuanbao-web": "deep_seek_v3"}[name]}}},
 			"network_config":         map[string]any{"base_url": "http://127.0.0.1:8792/providers/" + name, "allow_private_network": true, "max_retries": 0},
 			"custom_provider_config": map[string]any{"base_provider_type": "openai", "allowed_requests": allowed},
 		}
 	}
 	for _, name := range []string{"modelscope", "qwen"} {
 		providers[name] = map[string]any{
-			"keys":                   []any{map[string]any{"id": name + "-fixture-key", "name": "modelscope-fixture", "value": "synthetic-modelscope", "models": []string{"*"}, "weight": 1, "is_active": true, "aliases": map[string]string{"fixture-alias": "fixture/image-model", "image-base": "EA-Qwen-Image/Qwen-Image-2.1"}}},
+			"keys":                   []any{map[string]any{"id": name + "-fixture-key", "name": "modelscope-fixture", "value": "synthetic-modelscope", "models": []string{"*"}, "weight": 1, "enabled": true, "aliases": map[string]string{"fixture-alias": "fixture/image-model", "image-base": "EA-Qwen-Image/Qwen-Image-2.1"}}},
 			"network_config":         map[string]any{"base_url": "http://127.0.0.1:8792/providers/modelscope", "allow_private_network": true, "max_retries": 0},
 			"custom_provider_config": map[string]any{"base_provider_type": "openai", "allowed_requests": map[string]bool{"list_models": true, "chat_completion": true, "chat_completion_stream": true, "responses": true, "responses_stream": true, "image_generation": true, "image_edit": true}},
 		}

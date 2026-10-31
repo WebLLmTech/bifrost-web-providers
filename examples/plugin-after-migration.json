@@ -1,0 +1,12 @@
+{
+  "name": "web-providers",
+  "enabled": true,
+  "path": "/plugins/web-providers.so",
+  "config": {
+    "listen_addr": "127.0.0.1:8792",
+    "providers": {
+      "deepseek-web": {"type": "deepseek", "options": {}},
+      "yuanbao-web": {"type": "yuanbao", "options": {"browserless_url": "ws://browserless-chromium:3000"}}
+    }
+  }
+}

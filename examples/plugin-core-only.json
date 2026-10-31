@@ -1,0 +1,11 @@
+{
+  "name": "web-providers",
+  "enabled": true,
+  "path": "/plugins/web-providers.so",
+  "config": {
+    "listen_addr": "127.0.0.1:8792",
+    "request_timeout_seconds": 300,
+    "max_request_mb": 32,
+    "providers": {}
+  }
+}

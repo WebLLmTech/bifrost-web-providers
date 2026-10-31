@@ -5,8 +5,26 @@
   "config": {
     "listen_addr": "127.0.0.1:8792",
     "providers": {
-      "deepseek-web": {"type": "deepseek", "options": {}},
-      "yuanbao-web": {"type": "yuanbao", "options": {"browserless_ws": "ws://browserless-chromium:3000"}}
-    }
+      "deepseek-web": {
+        "type": "deepseek",
+        "options": {}
+      },
+      "yuanbao-web": {
+        "type": "yuanbao",
+        "options": {
+          "browserless_ws": "ws://browserless-chromium:3000"
+        }
+      },
+      "modelscope": {
+        "type": "modelscope",
+        "options": {
+          "base_url": "https://api-inference.modelscope.ai",
+          "timeout_seconds": 540,
+          "max_result_mb": 64
+        }
+      }
+    },
+    "request_timeout_seconds": 600,
+    "max_request_mb": 100
   }
 }

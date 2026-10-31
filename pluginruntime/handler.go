@@ -82,6 +82,10 @@ func (r *Runtime) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		jsonResponse(w, 200, map[string]any{"object": "list", "data": models})
 		return
 	}
+	if route == "images/generations" || route == "images/edits" {
+		r.images(ctx, w, request, p, rc, route == "images/edits")
+		return
+	}
 	if route != "chat/completions" && route != "responses" {
 		sendError(w, core.Unsupported("This provider endpoint is not supported"), credential)
 		return

@@ -75,6 +75,45 @@
           "transcription_stream": false
         }
       }
+    },
+    "modelscope": {
+      "keys": [
+        {
+          "id": "modelscope-key",
+          "name": "modelscope",
+          "value": "env.MODELSCOPE_TOKEN",
+          "models": [
+            "*"
+          ],
+          "weight": 1,
+          "is_active": true
+        }
+      ],
+      "network_config": {
+        "base_url": "http://127.0.0.1:8792/providers/modelscope",
+        "allow_private_network": true,
+        "max_retries": 0,
+        "default_request_timeout_in_seconds": 600
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai",
+        "allowed_requests": {
+          "list_models": true,
+          "chat_completion": true,
+          "chat_completion_stream": true,
+          "responses": true,
+          "responses_stream": true,
+          "text_completion": false,
+          "text_completion_stream": false,
+          "embedding": false,
+          "speech": false,
+          "speech_stream": false,
+          "transcription": false,
+          "transcription_stream": false,
+          "image_generation": true,
+          "image_edit": true
+        }
+      }
     }
   },
   "plugins": [
@@ -94,8 +133,18 @@
             "options": {
               "browserless_ws": "ws://browserless-chromium:3000"
             }
+          },
+          "modelscope": {
+            "type": "modelscope",
+            "options": {
+              "base_url": "https://api-inference.modelscope.ai",
+              "timeout_seconds": 540,
+              "max_result_mb": 64
+            }
           }
-        }
+        },
+        "request_timeout_seconds": 600,
+        "max_request_mb": 100
       }
     }
   ],
@@ -124,6 +173,16 @@
             ],
             "key_ids": [
               "yuanbao-web-key"
+            ],
+            "weight": 1
+          },
+          {
+            "provider": "modelscope",
+            "allowed_models": [
+              "*"
+            ],
+            "key_ids": [
+              "*"
             ],
             "weight": 1
           }

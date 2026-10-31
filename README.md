@@ -3,14 +3,14 @@
 > **本项目由 Qwen3.8 Max 开发**
 
 将 `chat-base` 共用逻辑和网页端 Provider 收敛到一个 Go 项目，通过 Bifrost
-原生插件加载。包含共享 core、DeepSeek 网页 Provider 与元宝网页 Provider。
+原生插件加载。包含共享 core、DeepSeek/元宝网页 Provider，以及迁入的现有 ModelScope 适配。
 
 ## 当前状态
 
 - core、HTTP runtime、原生插件生命周期已实现。
 - Chat Completions、SSE、无状态 Responses、Models 共用同一 Provider 接口。
 - 已验证 race tests、vet，以及真实 `plugin.Open` 加载、请求和卸载。
-- DeepSeek、元宝已注册，具备真实 PoW / CDP 签名与合成上游回归测试。
+- DeepSeek、元宝、ModelScope 已注册，具备真实 PoW / CDP 签名 / 异步图像协议与合成上游回归测试。
 - 完整动态 Bifrost 镜像已构建，真实网关的离线模拟上游回归已通过。
   现有静态 Bifrost 镜像不能加载 `.so`。
 - 尚未用真实账号联网验收，未修改生产 Bifrost 或旧 Deno 服务。
@@ -30,6 +30,7 @@ docs/             设计与 QwenDev 迁移交接
 
 设计：[DESIGN.md](docs/DESIGN.md)。接口说明：[PROVIDER-SDK.md](docs/PROVIDER-SDK.md)。
 Provider 配置与差异：[PROVIDERS.md](docs/PROVIDERS.md)。
+部署结构与现有 ModelScope 迁移：[MODELSCOPE.md](docs/MODELSCOPE.md)。
 审核记录：[REVIEW.md](docs/REVIEW.md)。迁移任务记录：[QWENDEV-HANDOFF.md](docs/QWENDEV-HANDOFF.md)。
 
 ## 请求链路
@@ -42,9 +43,11 @@ flowchart LR
     Entry --> Core["core：统一事件与协议"]
     Core --> DeepSeek[DeepSeek Provider]
     Core --> Yuanbao[Yuanbao Provider]
+    Core --> ModelScope[ModelScope Provider]
   end
   DeepSeek --> DeepSeekWeb[DeepSeek 网页接口]
   Yuanbao --> YuanbaoWeb[元宝网页接口 / Browserless]
+  ModelScope --> ModelScopeAPI[ModelScope API / 异步图像任务]
 ```
 
 Bifrost custom provider 的 base URL 使用
@@ -52,7 +55,8 @@ Bifrost custom provider 的 base URL 使用
 `http://127.0.0.1:8792/providers/yuanbao-web`，并设置
 `allow_private_network: true`、`base_provider_type: openai`。
 默认请求路径追加 `/v1/chat/completions`、`/v1/models`、`/v1/responses`。
-Provider Key 仍由 Bifrost 管理，插件配置不保存 token/cookie。
+三个 Provider 共享 Bifrost 进程内的一个入口，无需各自部署 API 服务；
+元宝自动签名仍使用外部 Browserless。Provider Key 仍由 Bifrost 管理，插件配置不保存 token/cookie。
 完整配置参考 [examples/bifrost.json](examples/bifrost.json)，其中凭证使用环境变量引用。
 
 ## 验证
